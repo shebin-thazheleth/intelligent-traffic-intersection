@@ -15,23 +15,40 @@ const int vehicleEW = 12;
 const int vehicleNS = 13;
 
 // Light delay
-int delayTime = 1000; //1sec
+unsigned long delayTime = 1000; //1sec
 
 // Light delays
-int amberLightDelay = 2000; //2sec
-int greenLightDelay = 5000; //20sec for now 5 sec
-int redLightDelay = 3000; //3 sec
+unsigned long amberLightDelay = 2000; //2sec
+unsigned long minimumGreenLight = 20000; //20 sec
+unsigned long vehicleTime = 5000; //5s
+unsigned long redLightDelay = 3000; //3 sec
 
-//boolean to control state
-boolean isNSTrafficGreen = false;
+int vehicleNSCounter = 0;   // counter for the number of vehicles in NS
+int vehicleNSState = 0;        // current state of the vehicleNS button
+int lastVehicleNSState = 0;    // previous state of the vehicleNS button
 
-int vehicleNSCounter = 0;   // counter for the number of button presses
-int vehicleNSState = 0;        // current state of the button
-int lastVehicleNSState = 0;    // previous state of the button
+int vehicleEWCounter = 0;   // counter for the number of vehicleNS in EW
+int vehicleEWState = 0;        // current state of the vehicleNS button
+int lastVehicleEWState = 0;    // previous state of the vehicleNS button
 
-int vehicleEWCounter = 0;   // counter for the number of button presses
-int vehicleEWState = 0;        // current state of the button
-int lastVehicleEWState = 0;    // previous state of the button
+// time since processing started
+unsigned long timeSinceStart;
+unsigned long previousTimeSinceStart;
+// time to track the greenSignal
+unsigned long timeWhenGreenSignal = 0;
+
+unsigned long previousVehicleTime = 0;
+
+enum trafficStates {
+  NS_GREEN, // North South green
+  NS_AMBER, // North South amber
+  NS_RED, // North South red
+  EW_GREEN, // East West green
+  EW_AMBER, // East West amber
+  EW_RED // East West red
+};
+
+enum trafficStates traffic = NS_GREEN;
 
 //FUNCTIONS
 
@@ -59,24 +76,39 @@ void countEWVehicles() {
   lastVehicleEWState = vehicleEWState;
 }
 
-//our second task, fires every few seconds and rotates signals
-void changeSignal() {
-  //check current state. check if theres any vehicle in other side if so rotate signal
-  if (isNSTrafficGreen && vehicleEWCounter > 0) {
-    changeEWTrafficToGreen();
-  } else if (!isNSTrafficGreen && vehicleNSCounter > 0) {
-    changeNSTrafficToGreen();
-  } else {
-    //do nothing
+/**
+   Passes vehicles
+*/
+void passVehicles() {
+  //pass vehicles only after minimum vehicle time
+  if (timeSinceStart - previousVehicleTime > vehicleTime) {
+    //Pass any blocked vehicles in NS traffic
+    if (traffic == NS_GREEN) {
+      //when NS traffic cycle change traffic to north south
+      if (vehicleNSCounter > 0 && (timeSinceStart - timeWhenGreenSignal > vehicleTime)) {
+        vehicleNSCounter = vehicleNSCounter - 1;
+        Serial.print("Vehicle NORTH-SOUTH passing. Total vehicles remainning: ");
+        Serial.println(vehicleNSCounter);
+        previousVehicleTime = timeSinceStart;
+      }
+    }
+
+    if (traffic == EW_GREEN) {
+      //when NS traffic cycle change traffic to north south
+      if (vehicleEWCounter > 0 && (timeSinceStart - timeWhenGreenSignal > vehicleTime)) {
+        vehicleEWCounter = vehicleEWCounter - 1;
+        Serial.print("Vehicle EAST-WEST passing. Total vehicles remainning: ");
+        Serial.println(vehicleEWCounter);
+        previousVehicleTime = timeSinceStart;
+      }
+    }
   }
 }
 
-//create a couple timers that will fire repeatedly every x ms
-TimedAction vehiclesNSThread = TimedAction(300, countNSVehicles);
-TimedAction vehiclesEWThread = TimedAction(300, countEWVehicles);
-TimedAction signalThread = TimedAction(5000, changeSignal); //minimum cycle green is 20s we use 5 for now
-TimedAction vehicleRemovalThread = TimedAction(1000, passVehicles); //minimum 1 second for a vehicle to pass
-
+//creates a couple timers that will fire repeatedly every x ms
+TimedAction vehiclesNSThread = TimedAction(50, countNSVehicles); // checks for NS vehicle every 50 sec and count the total vehicle
+TimedAction vehiclesEWThread = TimedAction(50, countEWVehicles); // checks for ES vehicle every 50 sec and count the total vehicle
+TimedAction vehicleRemovalThread = TimedAction(1000, passVehicles); //a vehicle take minimum 5 to pass
 
 
 // where's our third task? well, it's the loop itself :) the task
@@ -102,12 +134,39 @@ void setup() {
 
 void loop() {
   // put your main code here, to run repeatedly:
+  timeSinceStart = millis();
+
+  switch (traffic) {
+    case NS_GREEN:
+      if (vehicleEWCounter > 0) {
+        changeEWGreenToAmber();
+      }
+      break;
+    case EW_GREEN:
+      if (vehicleNSCounter > 0) {
+        changeNSGreenToAmber();
+      }
+      break;
+    case NS_AMBER:
+      changeNSAmberToRed();
+      break;
+    case NS_RED:
+      changeNSRedToEWGreen();
+      break;
+    case EW_AMBER:
+      changeEWAmberToRed();
+      break;
+    case EW_RED:
+      changeEWRedToNSGreen();
+      break;
+    default:
+      break;
+  }
 
   //check on our threads. based on how long the system has been
   //running, do they need to fire and do work? if so, do it!
   vehiclesNSThread.check();
   vehiclesEWThread.check();
-  signalThread.check();
   vehicleRemovalThread.check();
 
   vehicleEWState = digitalRead(vehicleEW);
@@ -117,62 +176,84 @@ void loop() {
 void setInitialTrafficCondition() {
   //initial stage
   //NS green on, red and amber off
-  if (!isNSTrafficGreen) {
-    digitalWrite(trafficNSLights[0], HIGH);
-    digitalWrite(trafficEWLights[2], HIGH);
-    delay(greenLightDelay);
-    isNSTrafficGreen = true;
+  if (traffic == NS_GREEN) {
+    setEWTrafficLights(LOW, LOW, HIGH);
+    setNSTrafficLights(HIGH, LOW, LOW);
   }
 }
 
-/**
-   Passes vehicles
-*/
-void passVehicles() {
-  //Pass any blocked vehicles in NS traffic
-  if (isNSTrafficGreen) {
-    //when NS traffic cycle change traffic to north south
-    if (vehicleNSCounter > 0) {
-      Serial.print("Total NORTH-SOUTH vehicles. ");
-      Serial.println(vehicleNSCounter);
-      vehicleNSCounter = vehicleNSCounter - 1;
-      Serial.print("Vehicle NORTH-SOUTH passing. Total Number remainning");
-      Serial.println(vehicleNSCounter);
-    }
+void changeEWGreenToAmber() {
+  if (timeSinceStart - previousTimeSinceStart > minimumGreenLight) {
+    Serial.println("Vehicle EAST-WEST direction. Changing signal EAST-WEST to green");
+
+    //change NS to amber
+    setNSTrafficLights(LOW, HIGH, LOW);
+
+    traffic = NS_AMBER;
+    previousTimeSinceStart = timeSinceStart;
+  }
+  else {
+    //if waiting for green light
+    Serial.print("Time left for changing EAST WEST to green in : ");
+    Serial.print((long(minimumGreenLight) - (timeSinceStart - previousTimeSinceStart)) / long(1000));
+    Serial.println("s");
+  }
+}
+
+void changeNSGreenToAmber() {
+  if (timeSinceStart - previousTimeSinceStart > minimumGreenLight) {
+    Serial.println("Vehicle NORTH-SOUTH direction. Changing signal NORTH-SOUTH to green");
+
+    //change EW to amber
+    setEWTrafficLights(LOW, HIGH, LOW);
+    traffic = EW_AMBER;
+    previousTimeSinceStart = timeSinceStart;
   } else {
-    //when NS traffic cycle change traffic to north south
-    if (vehicleEWCounter > 0) {
-      Serial.print("Total EAST-WEST vehicles. ");
-      Serial.println(vehicleEWCounter);
-      vehicleEWCounter = vehicleEWCounter - 1;
-      Serial.print("Vehicle EAST-WEST passing. Total Number remainning");
-      Serial.println(vehicleEWCounter);
-    }
+    //if waiting for green light
+    Serial.print("Time left for changing NORTH SOUTH to green in : ");
+    Serial.print((long(minimumGreenLight) - (timeSinceStart - previousTimeSinceStart)) / long(1000));
+    Serial.println("s");
   }
 }
 
-void changeEWTrafficToGreen() {
-  Serial.println("Vechile EAST-WEST direction. Changing signal EAST-WEST to green");
-  //Change NS to red
-  setNSTrafficLights(LOW, HIGH, LOW);
-  delay(amberLightDelay);
-  setNSTrafficLights(LOW, LOW, HIGH);
-  //Change EW to green
-  delay(redLightDelay);
-  setEWTrafficLights(HIGH, LOW, LOW);
-  isNSTrafficGreen = false;
+void changeNSAmberToRed() {
+  if (timeSinceStart - previousTimeSinceStart > amberLightDelay) {
+    //Set NS to red
+    setNSTrafficLights(LOW, LOW, HIGH);
+    traffic = NS_RED;
+    previousTimeSinceStart = timeSinceStart;
+  }
 }
 
-void changeNSTrafficToGreen() {
-  Serial.println("Vechile NORTH-SOUTH direction. Changing signal NORTH-SOUTH to green");
-  //Change EW to red
-  setEWTrafficLights(LOW, HIGH, LOW);
-  delay(amberLightDelay);
-  setEWTrafficLights(LOW, LOW, HIGH);
-  //Change NS to green
-  delay(redLightDelay);
-  setNSTrafficLights(HIGH, LOW, LOW);
-  isNSTrafficGreen = true;
+void changeNSRedToEWGreen() {
+  if (timeSinceStart - previousTimeSinceStart > redLightDelay) {
+    //Set EW to green
+    setEWTrafficLights(HIGH, LOW, LOW);
+    timeWhenGreenSignal = timeSinceStart;
+    Serial.println("EAST-WEST direction signal green");
+    traffic = EW_GREEN;
+    previousTimeSinceStart = timeSinceStart;
+  }
+}
+
+void changeEWAmberToRed() {
+  if (timeSinceStart - previousTimeSinceStart > amberLightDelay) {
+    //Set EW to red
+    setEWTrafficLights(LOW, LOW, HIGH);
+    traffic = EW_RED;
+    previousTimeSinceStart = timeSinceStart;
+  }
+}
+
+void changeEWRedToNSGreen() {
+  if (timeSinceStart - previousTimeSinceStart > redLightDelay) {
+    //Set NS to green
+    setNSTrafficLights(HIGH, LOW, LOW);
+    timeWhenGreenSignal = timeSinceStart;
+    Serial.println("NORTH-SOUTH direction signal green");
+    traffic = NS_GREEN;
+    previousTimeSinceStart = timeSinceStart;
+  }
 }
 
 void setNSTrafficLights(uint8_t  greenValue, uint8_t amberValue, uint8_t redValue) {
