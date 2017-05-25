@@ -1,325 +1,425 @@
 //allows us to set actions to perform on separate timed intervals
 //http://playground.arduino.cc/Code/TimedAction
 #include <TimedAction.h>
+#include <Pedestrian.h>
+#include <Vehicle.h>
+#include <TrafficLight.h>
+#include <TrafficColor.h>
+#include <PedestrianLight.h>
+#include <Light.h>
+#include <EVehicle.h>
 
 const int trafficLightCount = 3;
 
 // Pin 2 - green, pin 3 - amber, pin 4 - red.
-int trafficNSLights[] = { 2, 3, 4 };
+int trafficNSLightPins[] = { 8, 9, 10 };
 
 // Pin 5 - green, pin 6 - amber, pin 7 - red.
-int trafficEWLights[] = { 5, 6, 7 };
+int trafficEWLightPins[] = { 11, 12, 13 };
 
 // Pin for controlling traffic
-const int vehicleEW = 12;
-const int vehicleNS = 13;
+int vehicleNSPin = 4;
+int vehicleEWPin = 5;
 
-// Light delay
-unsigned long delayTime = 1000; //1sec
+// Pin for emergency vehicle detection external interruptable pins
+const int eVehicleNSPin = 2;
+const int eVehicleEWPin = 3;
 
-// Light delays
-unsigned long amberLightDelay = 2000; //2sec
+volatile byte eVehicleNSState = 0;
+volatile byte eVehicleEWState = 0;
+
+// Due to lack of pins in ardunio uno temporary using pin 2 and 3 for pedestrian testing
+const int pedNSPin = 0;
+const int pedEWPin = 1;
+
+// Pin for pedestrian crossing light
+const int pedNSLightPin = 6;
+const int pedEWLightPin = 7;
+
 unsigned long minimumGreenLight = 20000; //20 sec
-unsigned long minimumNSGreenLight = 20000; //20 sec
-unsigned long minimumEWGreenLight = 20000; //20 sec
 unsigned long vehicleTime = 5000; //5s
 unsigned long redLightDelay = 3000; //3 sec
 
-int vehicleNSCounter = 0;   // counter for the number of vehicles in NS
-int vehicleNSState = 0;        // current state of the vehicleNS button
-int lastVehicleNSState = 0;    // previous state of the vehicleNS button
-int maxVehicleNSCount = 20; //maximum sensor can read
-
-int vehicleEWCounter = 0;   // counter for the number of vehicleNS in EW
-int vehicleEWState = 0;        // current state of the vehicleNS button
-int lastVehicleEWState = 0;    // previous state of the vehicleNS button
-int maxVehicleEWCount = 20; //maximum sensor can read
-
 // time since processing started
 unsigned long timeSinceStart;
-unsigned long previousTimeSinceStart;
-// time to track the greenSignal
-unsigned long timeWhenGreenSignal = 0;
 
 unsigned long previousVehicleTime = 0;
 
+
 enum trafficStates {
   NS_GREEN, // North South green
-  NS_AMBER, // North South amber
-  NS_RED, // North South red
+  NS_AMBER,
+  NS_PED_ON,
+  NS_PED_OFF,
+  NS_EVEHICLE,
+  EW_EVEHICLE,
+  EW_PED_OFF,
+  NS_RED,
+  EW_PED_ON, // North South pedestrian
   EW_GREEN, // East West green
-  EW_AMBER, // East West amber
-  EW_RED // East West red
+  EW_AMBER,
+  EW_RED
+};
+
+enum pedStates {
+  NS_GREEN_WITH_VEHICLES, //with vehicles // North South green
+  EW_GREEN_WITH_VEHICLES,
+  NS_GREEN_WITHOUT_VEHICLES, //with vehicles // North South green
+  EW_GREEN_WITHOUT_VEHICLES
 };
 
 enum trafficStates traffic = NS_GREEN;
 enum trafficStates previousSignalState = NS_GREEN;
 
-//FUNCTIONS
+String vehicleNSName = "VehicleNS";
+String vehicleEWName = "VehicleEW";
+Vehicle vehicleNS = Vehicle(vehicleNSPin, vehicleNSName, 50);
+Vehicle vehicleEW = Vehicle(vehicleEWPin, vehicleEWName, 50);
 
-// Keep track of the number of vehicles in NS
-void countNSVehicles() {
-  if (maxVehicleNSCount > vehicleNSCounter) {
-    if (vehicleNSState != lastVehicleNSState) {
-      if (vehicleNSState == HIGH) {
-        vehicleNSCounter = vehicleNSCounter + 1;
-        Serial.print("North-South vehicle total count: ");
-        Serial.println(vehicleNSCounter);
-      }
-    }
-    lastVehicleNSState = vehicleNSState;
-  } else {
-    Serial.println("Stop pressing the push button NS sensor can't detect anymore vehicle");
-  }
-}
+String trafficNSName = "TrafficNS";
+String trafficEWName = "TrafficEW";
+TrafficLight trafficNS = TrafficLight(trafficNSLightPins, trafficColor::GREEN, trafficNSName, 50);
+TrafficLight trafficEW = TrafficLight(trafficEWLightPins, trafficColor::RED, trafficEWName, 50);
 
-// Keep track of the number of vehicles in EW
-void countEWVehicles() {
-  if (maxVehicleEWCount > vehicleEWCounter) {
-    if (vehicleEWState != lastVehicleEWState) {
-      if (vehicleEWState == HIGH) {
-        vehicleEWCounter = vehicleEWCounter + 1;
-        Serial.print("East-West vehicle total count: ");
-        Serial.println(vehicleEWCounter);
-      }
-    }
-    lastVehicleEWState = vehicleEWState;
-  } else {
-    Serial.println("Stop pressing the push button EW sensor can't detect anymore vehicle");
-  }
-}
+String pedNSName = "pedNS";
+String pedEWName = "pedEW";
+
+Pedestrian pedNS = Pedestrian(pedNSPin, pedNSName, 100);
+Pedestrian pedEW = Pedestrian(pedEWPin, pedEWName, 100);
+
+String pedNSLightName = "pedNSLight";
+String pedEWLightName = "pedEWLight";
+
+PedestrianLight pedNSLight = PedestrianLight(pedNSLightPin, pedNSLightName);
+PedestrianLight pedEWLight = PedestrianLight(pedEWLightPin, pedEWLightName);
+
+String eVehicleNSName = "eVehicleNS";
+String eVehicleEWName = "eVehicleEW";
+
+EVehicle eVehicleNS = EVehicle(eVehicleNSPin, eVehicleNSName, 0); //check every second
+EVehicle eVehicleEW = EVehicle(eVehicleEWPin, eVehicleEWName, 0);
+
 
 /**
    Passes vehicles
 */
 void passVehicles() {
   //pass vehicles only after minimum vehicle time
-  if (timeSinceStart - previousVehicleTime > vehicleTime) {
+  if (millis() - previousVehicleTime > vehicleTime) {
     //Pass any blocked vehicles in NS traffic
-    if (traffic == NS_GREEN) {
+    if (traffic == NS_GREEN || traffic == NS_PED_OFF || traffic == NS_PED_ON || traffic == NS_EVEHICLE) {
       //when NS traffic cycle change traffic to north south
-      if (vehicleNSCounter > 0 && (timeSinceStart - timeWhenGreenSignal > vehicleTime)) {
-        vehicleNSCounter = vehicleNSCounter - 1;
+      int count = vehicleNS.getCount();
+      if (count > 0 && (millis() - trafficNS.getPreviousStateTime() > vehicleTime)) {
+        vehicleNS.setCount(count - 1);
         Serial.print("Vehicle NORTH-SOUTH passing. Total vehicles remainning: ");
-        Serial.println(vehicleNSCounter);
-        previousVehicleTime = timeSinceStart;
+        Serial.println(vehicleNS.getCount());
+        previousVehicleTime = millis();
       }
     }
 
-    if (traffic == EW_GREEN) {
+    if (traffic == EW_GREEN || traffic == EW_PED_OFF || traffic == EW_PED_ON || traffic == EW_EVEHICLE) {
+      int count = vehicleEW.getCount();
       //when NS traffic cycle change traffic to north south
-      if (vehicleEWCounter > 0 && (timeSinceStart - timeWhenGreenSignal > vehicleTime)) {
-        vehicleEWCounter = vehicleEWCounter - 1;
+      if (count > 0 && (millis() - trafficEW.getPreviousStateTime() > vehicleTime)) {
+        vehicleEW.setCount(count - 1);
         Serial.print("Vehicle EAST-WEST passing. Total vehicles remainning: ");
-        Serial.println(vehicleEWCounter);
-        previousVehicleTime = timeSinceStart;
+        Serial.println(vehicleEW.getCount());
+        previousVehicleTime = millis();
       }
     }
   }
 }
 
 void sampleVehicles() {
-  if (previousSignalState != traffic) {
-    if (traffic == NS_GREEN && vehicleNSCounter < 8) {
-      minimumNSGreenLight = minimumGreenLight;
+  // count for a traffic change
+  if (previousSignalState != traffic && (traffic == NS_GREEN || traffic == EW_GREEN || traffic == NS_PED_ON || traffic == EW_PED_ON)) {
+
+    if (traffic == NS_GREEN && vehicleNS.getCount() < 8) {
+      unsigned long value = minimumGreenLight;
+
+      if (previousSignalState == NS_PED_ON) {
+        value = value - pedNSLight.getTotalDelay();
+      }
+
+      trafficNS.setGreenSignalTime(value);
       previousSignalState = NS_GREEN;
-      Serial.print("NS_GREEN normal green signal time: ");
-      Serial.println(minimumNSGreenLight/1000);
+      Serial.print("NS_GREEN calculated green signal time needed to change: ");
+      Serial.println(value / 1000);
     }
 
-    if (traffic == NS_GREEN && vehicleNSCounter >= 8) {
-      minimumNSGreenLight = minimumGreenLight * (vehicleNSCounter / 4);
+    if (traffic == NS_GREEN && vehicleNS.getCount() >= 8) {
+      unsigned long value = minimumGreenLight;
+
+      // use normal time to change traffic if emergency vehicle
+      if (!eVehicleEW.hasEVehicle()) {
+        value = minimumGreenLight * (vehicleNS.getCount() / 4);
+      }
+
+      trafficNS.setGreenSignalTime(value);
       previousSignalState = NS_GREEN;
-      Serial.print("NS_GREEN calculated green signal time: ");
-      Serial.println(minimumNSGreenLight/1000);
+      Serial.print("NS_GREEN calculated green signal time needed to change: ");
+      Serial.println(value / 1000);
     }
 
-    if (traffic == EW_GREEN && vehicleEWCounter < 8) {
-      minimumEWGreenLight = minimumGreenLight;
+    if (traffic == EW_GREEN && vehicleEW.getCount() < 8) {
+      unsigned long value = minimumGreenLight;
+      if (previousSignalState == EW_PED_ON) {
+        value = value - pedEWLight.getTotalDelay();
+      }
+      trafficEW.setGreenSignalTime(value);
       previousSignalState = EW_GREEN;
-      Serial.print("EW_GREEN normal green signal time: ");
-      Serial.println(minimumEWGreenLight/1000);
+      Serial.print("EW_GREEN calculated Green signal time needed to change: ");
+      Serial.println(value / 1000);
     }
 
-    if (traffic == EW_GREEN && vehicleEWCounter >= 8) {
-      minimumEWGreenLight = minimumGreenLight * (vehicleEWCounter / 4);
+    if (traffic == EW_GREEN && vehicleEW.getCount() >= 8) {
+      unsigned long value = minimumGreenLight;
+
+      // use normal time to change traffic if emergency vehicle
+      if (!eVehicleNS.hasEVehicle()) {
+        value = minimumGreenLight  * (vehicleEW.getCount() / 4);
+      }
+
+      trafficEW.setGreenSignalTime(value);
       previousSignalState = EW_GREEN;
-      Serial.print("EW_GREEN calculated Green signal time: ");
-      Serial.println(minimumEWGreenLight/1000);
+      Serial.print("EW_GREEN calculated Green signal time needed to change: ");
+      Serial.println(value / 1000);
     }
+
+    if (traffic == NS_PED_ON) {
+      previousSignalState = NS_PED_ON;
+    }
+
+    if (traffic == EW_PED_ON) {
+      previousSignalState = EW_PED_ON;
+    }
+  }
+
+  //override initial state calculation if emergency vehicle
+  if ((eVehicleNS.hasEVehicle() && trafficNS.getGreenSignalTime() > minimumGreenLight) || (eVehicleEW.hasEVehicle() && trafficEW.getGreenSignalTime() > minimumGreenLight) ) {
+    if (eVehicleEW.hasEVehicle()) {
+      trafficNS.setGreenSignalTime(minimumGreenLight);
+    }
+
+    if (eVehicleNS.hasEVehicle()) {
+      trafficEW.setGreenSignalTime(minimumGreenLight);
+    }
+
+    Serial.println("Overrided calculated green signal due to emergency vehicle");
   }
 }
 
+void indicateEmergencyVehicleNS() {
+  if (eVehicleNSState != 1) {
+    // Bouncing of the switch
+    Serial.print(eVehicleNSState);
+    Serial.println(" : emergency vehicle NS INPUT");
+    eVehicleNSState = 1;
+  }
+}
+
+void indicateEmergencyVehicleEW() {
+  if (eVehicleEWState != 1) {
+    Serial.print(eVehicleEWState);
+    Serial.println(" : emergency vehicle EW INPUT");
+    eVehicleEWState = 1;
+  }
+}
+
+
 //creates a couple timers that will fire repeatedly every x ms
-TimedAction vehiclesNSThread = TimedAction(50, countNSVehicles); // checks for NS vehicle every 50 sec and count the total vehicle
-TimedAction vehiclesEWThread = TimedAction(50, countEWVehicles); // checks for ES vehicle every 50 sec and count the total vehicle
-TimedAction vehicleRemovalThread = TimedAction(1000, passVehicles); //a vehicle take minimum 5 to pass
-TimedAction signalThread = TimedAction(5000, sampleVehicles); //samples vehicle at both end
-
-
-
-// where's our third task? well, it's the loop itself :) the task
-// which repeats most often should be used as the loop. other
-// tasks are able to "interrupt" the fastest repeating task.
+TimedAction vehicleRemovalThread = TimedAction(1000, passVehicles); //a vehicle take minimum 5s to pass sampled at 1 sec
+TimedAction signalThread = TimedAction(1000, sampleVehicles); // samples vehicle at 5s both end to get a optimised traffic green time
 
 
 void setup() {
+  // pinMode(eVehicleNSPin, INPUT);
+  //pinMode(eVehicleEWPin, INPUT);
+
+  attachInterrupt(digitalPinToInterrupt(eVehicleNSPin), indicateEmergencyVehicleNS, FALLING);
+  attachInterrupt(digitalPinToInterrupt(eVehicleEWPin), indicateEmergencyVehicleEW, FALLING);
+
   // Put your setup code here, to run once:
-
-  // Make all traffic light pins output
-  for (int thisTrafficLight = 0; thisTrafficLight < trafficLightCount; thisTrafficLight++) {
-    pinMode(trafficNSLights[thisTrafficLight], OUTPUT);
-    pinMode(trafficEWLights[thisTrafficLight], OUTPUT);
-  }
-
-  // Input pins
-  pinMode(vehicleEW, INPUT);
-
-  Serial.begin(9600);
-  setInitialTrafficCondition();
+  Serial.begin(9600); // Can't use pin 0 and 1 becuase its using serial
 }
 
+// put your main code here, to run repeatedly:
 void loop() {
-  // put your main code here, to run repeatedly:
-  timeSinceStart = millis();
 
+  // retrives the time count after program started
+  timeSinceStart = millis();
+  checkState();
+
+  // Checks for vehicles inputs every 50ms
+  vehicleNS.check();
+  vehicleEW.check();
+
+  pedNS.check();
+  pedEW.check();
+
+  eVehicleNS.check(eVehicleNSState);
+  eVehicleEW.check(eVehicleEWState);
+
+  vehicleRemovalThread.check();
+  signalThread.check();
+}
+
+void checkState() {
   switch (traffic) {
     case NS_GREEN:
-      if (vehicleEWCounter > 0) {
-        changeNSGreenToAmber();
+      checkEmergencyVehicle();
+      // north south green and detected vehicle in east west OR pedo other end
+      if (vehicleEW.getCount() > 0 || pedEW.isActive() || eVehicleEW.hasEVehicle()) {
+        //based on calculated green time
+        trafficNS.changeToAmber();
+        if (trafficNS.getState() == trafficColor::AMBER) {
+          traffic = NS_AMBER;
+        } else if (pedNS.isActive()) {
+          //if traffic hasn't changed and 10s left before changing allow passenger to pass
+          if (millis() - trafficNS.getPreviousStateTime() <= pedNSLight.getTotalDelay()) {
+            if (pedNSLight.getState() == lightState::OFF) {
+              pedNSLight.updatePreviousStateTime();
+              traffic = NS_PED_OFF;
+            }
+          }
+        } else {
+        }
+      } else {
+        // meaning no vehicle opposite side and possibly a NS ped press
+        if (pedNS.isActive()) {
+          pedNSLight.updatePreviousStateTime();
+          traffic = NS_PED_OFF; // extend timing in normal flow
+        }
       }
       break;
     case EW_GREEN:
-      if (vehicleNSCounter > 0) {
-        changeEWGreenToAmber();
+      checkEmergencyVehicle();
+      if (vehicleNS.getCount() > 0 || pedNS.isActive() || eVehicleNS.hasEVehicle()) {
+        trafficEW.changeToAmber();
+        if (trafficEW.getState() == trafficColor::AMBER) {
+          traffic = EW_AMBER;
+        } else {
+          if (pedEW.isActive()) {
+            //if traffic hasn't changed and 10s left before changing allow passenger to pass
+            if (millis() - trafficEW.getPreviousStateTime() <= pedEWLight.getTotalDelay()) {
+              if (pedEWLight.getState() == lightState::OFF) {
+                pedEWLight.updatePreviousStateTime();
+                traffic = EW_PED_OFF;
+              }
+            }
+          }
+        }
+      } else {
+        // meaning no vehicle opposite side and possibly a EW ped press
+        if (pedEW.isActive()) {
+          pedEWLight.updatePreviousStateTime();
+          traffic = EW_PED_OFF; // extend timing in normal flow
+        }
       }
       break;
     case NS_AMBER:
-      changeNSAmberToRed();
+      trafficNS.changeToRed();
+      if (trafficNS.getState() == trafficColor::RED) {
+        traffic = NS_RED;
+      }
       break;
     case NS_RED:
-      changeNSRedToEWGreen();
+      // only after 3 sec after changing in other side
+      if (millis() - trafficNS.getPreviousStateTime() > redLightDelay) {
+        trafficEW.changeToGreen();
+        if (trafficEW.getState() == trafficColor::GREEN) {
+          traffic = EW_GREEN;
+        }
+      }
       break;
     case EW_AMBER:
-      changeEWAmberToRed();
+      trafficEW.changeToRed();
+      if (trafficEW.getState() == trafficColor::RED ) {
+        traffic = EW_RED;
+      }
       break;
     case EW_RED:
-      changeEWRedToNSGreen();
+      if (millis() - trafficEW.getPreviousStateTime() > redLightDelay) {
+        trafficNS.changeToGreen();
+        if (trafficNS.getState() == trafficColor::GREEN) {
+          traffic = NS_GREEN;
+        }
+      }
+      break;
+    case NS_PED_OFF:
+      if (pedNS.isActive()) {
+        if (pedNSLight.getState() == lightState::OFF) {
+          pedNSLight.changeToON();
+        } else {
+          traffic = NS_PED_ON;
+        }
+      }
+      break;
+    case NS_PED_ON:
+      if (pedNS.isActive()) {
+        if (pedNSLight.getState() == lightState::ON) {
+          pedNSLight.changeToOFF();
+        } else {
+          pedNS.deactivate();
+          traffic = NS_GREEN;
+        }
+      }
+      break;
+    case EW_PED_OFF:
+      if (pedEW.isActive()) {
+        if (pedEWLight.getState() == lightState::OFF) {
+          pedEWLight.changeToON();
+        } else {
+          traffic = EW_PED_ON;
+        }
+      }
+      break;
+    case EW_PED_ON:
+      if (pedEW.isActive()) {
+        if (pedEWLight.getState() == lightState::ON) {
+          pedEWLight.changeToOFF();
+        } else {
+          pedEW.deactivate();
+          traffic = EW_GREEN;
+        }
+      }
+      break;
+    case NS_EVEHICLE:
+      //stay in the same state for max vehicle delay
+      //EVehicle::MAX_EVEHICLE_DELAY
+      if (millis() - eVehicleNS.getPreviousStateTime() > 10000) {
+        eVehicleNSState = 0;
+        traffic = NS_GREEN;
+        Serial.println("NORTH SOUTH EMERGENCY VEHICLE PASSED.");
+      }
+      break;
+    case EW_EVEHICLE:
+      //stay in the same state for max vehicle delay
+      if (millis() - eVehicleEW.getPreviousStateTime() > 10000) {
+        eVehicleEWState = 0;
+        traffic = EW_GREEN;
+        Serial.println("EAST WEST EMERGENCY VEHICLE PASSED.");
+      }
       break;
     default:
       break;
   }
-
-  //check on our threads. based on how long the system has been
-  //running, do they need to fire and do work? if so, do it!
-  vehiclesNSThread.check();
-  vehiclesEWThread.check();
-  vehicleRemovalThread.check();
-  signalThread.check();
-
-  vehicleEWState = digitalRead(vehicleEW);
-  vehicleNSState = digitalRead(vehicleNS);
 }
 
-void setInitialTrafficCondition() {
-  //initial stage
-  //NS green on, red and amber off
+void checkEmergencyVehicle() {
   if (traffic == NS_GREEN) {
-    setEWTrafficLights(LOW, LOW, HIGH);
-    setNSTrafficLights(HIGH, LOW, LOW);
-  }
-}
-
-void changeNSGreenToAmber() {
-  if (timeSinceStart - previousTimeSinceStart > minimumNSGreenLight) {
-    Serial.println("Vehicle EAST-WEST direction. Changing signal EAST-WEST to green");
-
-    //change NS to amber
-    setNSTrafficLights(LOW, HIGH, LOW);
-
-    traffic = NS_AMBER;
-    previousTimeSinceStart = timeSinceStart;
-  }
-  else {
-    //limit printing
-    long remainingTime =  (minimumNSGreenLight - (timeSinceStart - previousTimeSinceStart)) / long(1000);
-    if (remainingTime % 3 == 0) {      //if waiting for green light
-      //if waiting for green light
-      Serial.print("Time left for changing EAST WEST to green in : ");
-      Serial.print(remainingTime);
-      Serial.println("s");
+    if (eVehicleNS.hasEVehicle()) {
+      Serial.println("NS_EMERGENCY_VEHICLE highest priority. NS traffic green for 1 min");
+      eVehicleNS.resetStateTime();
+      traffic = NS_EVEHICLE;
     }
-  }
-}
-
-void changeEWGreenToAmber() {
-  if (timeSinceStart - previousTimeSinceStart > minimumEWGreenLight) {
-    Serial.println("Vehicle NORTH-SOUTH direction. Changing signal NORTH-SOUTH to green");
-
-    //change EW to amber
-    setEWTrafficLights(LOW, HIGH, LOW);
-    traffic = EW_AMBER;
-    previousTimeSinceStart = timeSinceStart;
+  } else if (traffic == EW_GREEN) {
+    if (eVehicleEW.hasEVehicle()) {
+      Serial.println("EW_EMERGENCY_VEHICLE highest priority. EW traffic green for 1 min");
+      eVehicleEW.resetStateTime();
+      traffic = EW_EVEHICLE;
+    }
   } else {
-    //limit printing
-    long remainingTime =  (minimumEWGreenLight - (timeSinceStart - previousTimeSinceStart)) / long(1000);
-    if (remainingTime % 3 == 0) {      //if waiting for green light
-      Serial.print("Time left for changing NORTH SOUTH to green in : ");
-      Serial.print(remainingTime);
-      Serial.println("s");
-    }
   }
 }
-
-void changeNSAmberToRed() {
-  if (timeSinceStart - previousTimeSinceStart > amberLightDelay) {
-    //Set NS to red
-    setNSTrafficLights(LOW, LOW, HIGH);
-    traffic = NS_RED;
-    previousTimeSinceStart = timeSinceStart;
-  }
-}
-
-void changeNSRedToEWGreen() {
-  if (timeSinceStart - previousTimeSinceStart > redLightDelay) {
-    //Set EW to green
-    setEWTrafficLights(HIGH, LOW, LOW);
-    timeWhenGreenSignal = timeSinceStart;
-    Serial.println("EAST-WEST direction signal green");
-    traffic = EW_GREEN;
-    previousTimeSinceStart = timeSinceStart;
-  }
-}
-
-void changeEWAmberToRed() {
-  if (timeSinceStart - previousTimeSinceStart > amberLightDelay) {
-    //Set EW to red
-    setEWTrafficLights(LOW, LOW, HIGH);
-    traffic = EW_RED;
-    previousTimeSinceStart = timeSinceStart;
-  }
-}
-
-void changeEWRedToNSGreen() {
-  if (timeSinceStart - previousTimeSinceStart > redLightDelay) {
-    //Set NS to green
-    setNSTrafficLights(HIGH, LOW, LOW);
-    timeWhenGreenSignal = timeSinceStart;
-    Serial.println("NORTH-SOUTH direction signal green");
-    traffic = NS_GREEN;
-    previousTimeSinceStart = timeSinceStart;
-  }
-}
-
-void setNSTrafficLights(uint8_t  greenValue, uint8_t amberValue, uint8_t redValue) {
-  digitalWrite(trafficNSLights[0], greenValue);
-  digitalWrite(trafficNSLights[1], amberValue);
-  digitalWrite(trafficNSLights[2], redValue);
-}
-
-void setEWTrafficLights(uint8_t  greenValue, uint8_t amberValue, uint8_t redValue) {
-  digitalWrite(trafficEWLights[0], greenValue);
-  digitalWrite(trafficEWLights[1], amberValue);
-  digitalWrite(trafficEWLights[2], redValue);
-}
-
