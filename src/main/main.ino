@@ -11,10 +11,10 @@
 
 const int trafficLightCount = 3;
 
-// Pin 2 - green, pin 3 - amber, pin 4 - red.
+// Pin 8 - green, pin 9 - amber, pin 10 - red.
 int trafficNSLightPins[] = { 8, 9, 10 };
 
-// Pin 5 - green, pin 6 - amber, pin 7 - red.
+// Pin 11 - green, pin 12 - amber, pin 13 - red.
 int trafficEWLightPins[] = { 11, 12, 13 };
 
 // Pin for controlling traffic
