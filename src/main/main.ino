@@ -36,15 +36,8 @@ const int pedEWPin = 1;
 const int pedNSLightPin = 6;
 const int pedEWLightPin = 7;
 
-unsigned long minimumGreenLight = 20000; //20 sec
 unsigned long vehicleTime = 5000; //5s
-unsigned long redLightDelay = 3000; //3 sec
-
-// time since processing started
-unsigned long timeSinceStart;
-
 unsigned long previousVehicleTime = 0;
-
 
 enum trafficStates {
   NS_GREEN, // North South green
@@ -59,13 +52,6 @@ enum trafficStates {
   EW_GREEN, // East West green
   EW_AMBER,
   EW_RED
-};
-
-enum pedStates {
-  NS_GREEN_WITH_VEHICLES, //with vehicles // North South green
-  EW_GREEN_WITH_VEHICLES,
-  NS_GREEN_WITHOUT_VEHICLES, //with vehicles // North South green
-  EW_GREEN_WITHOUT_VEHICLES
 };
 
 enum trafficStates traffic = NS_GREEN;
@@ -136,7 +122,7 @@ void sampleVehicles() {
   if (previousSignalState != traffic && (traffic == NS_GREEN || traffic == EW_GREEN || traffic == NS_PED_ON || traffic == EW_PED_ON)) {
 
     if (traffic == NS_GREEN && vehicleNS.getCount() < 8) {
-      unsigned long value = minimumGreenLight;
+      unsigned long value = TrafficLight::GREEN_LIGHT_DELAY;
 
       if (previousSignalState == NS_PED_ON) {
         value = value - pedNSLight.getTotalDelay();
@@ -149,11 +135,11 @@ void sampleVehicles() {
     }
 
     if (traffic == NS_GREEN && vehicleNS.getCount() >= 8) {
-      unsigned long value = minimumGreenLight;
+      unsigned long value = TrafficLight::GREEN_LIGHT_DELAY;
 
       // use normal time to change traffic if emergency vehicle
       if (!eVehicleEW.hasEVehicle()) {
-        value = minimumGreenLight * (vehicleNS.getCount() / 4);
+        value = TrafficLight::GREEN_LIGHT_DELAY * (vehicleNS.getCount() / 4);
       }
 
       trafficNS.setGreenSignalTime(value);
@@ -163,7 +149,7 @@ void sampleVehicles() {
     }
 
     if (traffic == EW_GREEN && vehicleEW.getCount() < 8) {
-      unsigned long value = minimumGreenLight;
+      unsigned long value = TrafficLight::GREEN_LIGHT_DELAY;
       if (previousSignalState == EW_PED_ON) {
         value = value - pedEWLight.getTotalDelay();
       }
@@ -174,11 +160,11 @@ void sampleVehicles() {
     }
 
     if (traffic == EW_GREEN && vehicleEW.getCount() >= 8) {
-      unsigned long value = minimumGreenLight;
+      unsigned long value = TrafficLight::GREEN_LIGHT_DELAY;
 
       // use normal time to change traffic if emergency vehicle
       if (!eVehicleNS.hasEVehicle()) {
-        value = minimumGreenLight  * (vehicleEW.getCount() / 4);
+        value = TrafficLight::GREEN_LIGHT_DELAY  * (vehicleEW.getCount() / 4);
       }
 
       trafficEW.setGreenSignalTime(value);
@@ -197,22 +183,22 @@ void sampleVehicles() {
   }
 
   //override initial state calculation if emergency vehicle
-  if ((eVehicleNS.hasEVehicle() && trafficNS.getGreenSignalTime() > minimumGreenLight) || (eVehicleEW.hasEVehicle() && trafficEW.getGreenSignalTime() > minimumGreenLight) ) {
+  if ((eVehicleNS.hasEVehicle() && trafficNS.getGreenSignalTime() > TrafficLight::GREEN_LIGHT_DELAY) || (eVehicleEW.hasEVehicle() && trafficEW.getGreenSignalTime() > TrafficLight::GREEN_LIGHT_DELAY) ) {
     if (eVehicleEW.hasEVehicle()) {
-      trafficNS.setGreenSignalTime(minimumGreenLight);
+      trafficNS.setGreenSignalTime(TrafficLight::GREEN_LIGHT_DELAY);
     }
 
     if (eVehicleNS.hasEVehicle()) {
-      trafficEW.setGreenSignalTime(minimumGreenLight);
+      trafficEW.setGreenSignalTime(TrafficLight::GREEN_LIGHT_DELAY);
     }
 
     Serial.println("Overrided calculated green signal due to emergency vehicle");
   }
 }
 
+// Remove serial after testing
 void indicateEmergencyVehicleNS() {
   if (eVehicleNSState != 1) {
-    // Bouncing of the switch
     Serial.print(eVehicleNSState);
     Serial.println(" : emergency vehicle NS INPUT");
     eVehicleNSState = 1;
@@ -227,16 +213,12 @@ void indicateEmergencyVehicleEW() {
   }
 }
 
-
 //creates a couple timers that will fire repeatedly every x ms
 TimedAction vehicleRemovalThread = TimedAction(1000, passVehicles); //a vehicle take minimum 5s to pass sampled at 1 sec
 TimedAction signalThread = TimedAction(1000, sampleVehicles); // samples vehicle at 5s both end to get a optimised traffic green time
 
 
 void setup() {
-  // pinMode(eVehicleNSPin, INPUT);
-  //pinMode(eVehicleEWPin, INPUT);
-
   attachInterrupt(digitalPinToInterrupt(eVehicleNSPin), indicateEmergencyVehicleNS, FALLING);
   attachInterrupt(digitalPinToInterrupt(eVehicleEWPin), indicateEmergencyVehicleEW, FALLING);
 
@@ -247,21 +229,24 @@ void setup() {
 // put your main code here, to run repeatedly:
 void loop() {
 
-  // retrives the time count after program started
-  timeSinceStart = millis();
   checkState();
 
   // Checks for vehicles inputs every 50ms
   vehicleNS.check();
   vehicleEW.check();
 
+  // Checks for vehicles inputs every 50ms
   pedNS.check();
   pedEW.check();
 
+  // Sets the emergency vehicle internal states
   eVehicleNS.check(eVehicleNSState);
   eVehicleEW.check(eVehicleEWState);
 
+  // Passes vehicle if right state
   vehicleRemovalThread.check();
+
+  // Calculate the optimised green time
   signalThread.check();
 }
 
@@ -326,7 +311,7 @@ void checkState() {
       break;
     case NS_RED:
       // only after 3 sec after changing in other side
-      if (millis() - trafficNS.getPreviousStateTime() > redLightDelay) {
+      if (millis() - trafficNS.getPreviousStateTime() > TrafficLight::RED_LIGHT_DELAY) {
         trafficEW.changeToGreen();
         if (trafficEW.getState() == trafficColor::GREEN) {
           traffic = EW_GREEN;
@@ -340,7 +325,7 @@ void checkState() {
       }
       break;
     case EW_RED:
-      if (millis() - trafficEW.getPreviousStateTime() > redLightDelay) {
+      if (millis() - trafficEW.getPreviousStateTime() > TrafficLight::RED_LIGHT_DELAY) {
         trafficNS.changeToGreen();
         if (trafficNS.getState() == trafficColor::GREEN) {
           traffic = NS_GREEN;
